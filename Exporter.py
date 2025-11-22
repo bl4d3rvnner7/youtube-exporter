@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import argparse
+import subprocess
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -67,18 +68,15 @@ def grab_msg(msg) -> str:
             datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
         except:
             pass
-
     timestamp = msg.get('timestamp', '')
     display_name = msg.get('user_display_name', 'Unknown')
     handle = msg.get('user_handle', '@unknown')
     comment = msg.get('comment', '')
     badges = msg.get('badges', [])
     rank_number = msg.get('rank_number')
-
     time_display = timestamp if timestamp and timestamp != '0:00' else datetime_str
     rank_str = f" #{rank_number}" if rank_number is not None else ""
     badge_str = f" [{', '.join(badges)}]" if badges else ""
-
     return f"[{time_display}] {handle} ({display_name}){rank_str}{badge_str}: {comment}\n"
 
 
@@ -87,11 +85,12 @@ def download_image(username: str):
     filepath = os.path.join(main_dir, "ProfilePictures", f"{username}.jpg")
     if os.path.exists(filepath):
         return
-
-    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0','Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language': 'en-US,en;q=0.5','Accept-Encoding': 'gzip, deflate, br, zstd','DNT': '1','Sec-GPC': '1','Upgrade-Insecure-Requests': '1','Sec-Fetch-Dest': 'document','Sec-Fetch-Mode': 'navigate','Sec-Fetch-Site': 'cross-site','Connection': 'keep-alive'}
-    cookies = {'SOCS': 'CAISEwgDEgk4MzQ1MjYxNTkaAmVuIAEaBgiA1_7IBg','YSC': '8mKFfDLuLac','VISITOR_PRIVACY_METADATA': 'CgJHQhIEGgAgLQ%3D%3D','PREF': 'tz=Europe.Berlin&f6=40000000&f7=100','__Secure-YNID': '13.YT=pbVZojSmgwL0tSK0eVwQmumVcN05_aNG1jGYIvc5h4wLMZ05-8UINcl-XXwD4OhMrGz1-ertMeF7nWgoFLA0-LjBoVewKKyUemW5RHyknvAif-XIYiL4kmcMmbhbfx5BcZNAj5ZSXc5Yxco1gQsolyfbp2imiKy0lfHPFHGig7qx5iXoJphdi17-Oi7L1dogf5ZiImYmK8UDFmvhb45CP6tyNOBqOzvWV_pu_acMLrKbZbr0KjAhyvHKPXyOpARTvCxt7MzeFNb52VHIwLMKg-LW7tB-GwNvdiGzKe9TyXU3faAq7bVpOtrdvn71OvLOpE_6MmQ8TkhcXnRhDOJncw','VISITOR_INFO1_LIVE': 'NBIpGV5Ujd4','__Secure-ROLLOUT_TOKEN': 'CJK3o9nqzcnPTRDY46fvq4SRAxjY88fvq4SRAw%3D%3D','GPS': '1'}
+    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0','Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language': 'en-US,en;q=0.5','DNT': '1','Sec-GPC': '1','Upgrade-Insecure-Requests': '1','Sec-Fetch-Dest': 'document','Sec-Fetch-Mode': 'navigate','Sec-Fetch-Site': 'cross-site','Connection': 'keep-alive'}
+    cookies = {'SOCS': 'CAISEwgDEgk4MzQ1MjYxNTkaAmVuIAEaBgiA1_7IBg','YSC': '8mKFfDLuLac','VISITOR_PRIVACY_METADATA': 'CgJHQhIEGgAgLQ%3D%3D','PREF': 'tz=Europe.Berlin&f6=40000000&f7=100','VISITOR_INFO1_LIVE': 'NBIpGV5Ujd4','GPS': '1'}
     try:
-        response = requests.get(f'https://www.youtube.com/@{username}', headers=headers, cookies=cookies, timeout=10)
+        if "@" in username:
+            username = username.replace('@', '')
+        response = requests.get(f'https://www.youtube.com/@{username}', headers=headers, cookies=cookies, timeout=3)
         match = re.search(r'<meta property="og:image" content="(.*?)"', response.text)
         if match:
             img_url = match.group(1)
@@ -159,12 +158,12 @@ def main():
         print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading chat...\x1b[0m")
         downloader = YouTubeChatDownloader()
         try:
-            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "ChatDump.json"))
+            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "Chat.json"))
         except Exception as e:
             print(f"Chat-Error: {e}")
             chat = []
 
-        with open(os.path.join(main_dir, "Chatdump.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(main_dir, "Chat.txt"), "w", encoding="utf-8") as f:
             for msg in chat:
                 try:
                     kcounter += 1
@@ -175,7 +174,7 @@ def main():
                     print(f"Error at dumping chat: {e}")
                     continue
 
-        print(f"\x1b[97m[\x1b[92m+\x1b[97m] \x1b[95m{kcounter}\x1b[97m Exported chat → Chatdump.txt\x1b[0m")
+        print(f"\x1b[97m[\x1b[92m+\x1b[97m] \x1b[95m{kcounter}\x1b[97m Exported chat → Chat.txt\x1b[0m")
 
     # ======================= TRANSCRIPT =======================
     if not skip_export:
@@ -191,18 +190,21 @@ def main():
     # ======================= VIDEO DOWNLOAD =======================
     if not skip_download:
         print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading video, this can take a while...\x1b[0m")
-        ydl_opts = {
-            'format': (
-                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'best[height<=1080][ext=mp4]/'
-                'best[height<=1080]/best'
-            ),
-            'merge_output_format': 'mp4',
-            'outtmpl': os.path.join(main_dir, '%(title)s.%(ext)s'),
-            'concurrent_fragment_downloads': 12,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        
+        outpath = os.path.join(main_dir, "%(title)s.%(ext)s")
+        cmd = [
+            "yt-dlp",
+            "-N", "4",
+            "--no-part",
+            "-o", outpath,
+            "--wait-for-video", "5-15",
+            "--continue",
+            "--retries", "infinite",
+            "--fragment-retries", "infinite",
+            "--no-overwrites",
+            url
+        ]
+        subprocess.run(cmd, check=True)
         print(f"\x1b[97m[\x1b[92m+\x1b[97m] Saved Video!\x1b[0m")
 
     # ======================= VIDEO INFO TXT =======================
