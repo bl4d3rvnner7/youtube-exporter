@@ -199,6 +199,7 @@ def main():
             "-o", outpath,
             "--wait-for-video", "5-15",
             "--continue",
+            "-f", "mp4",
             "--retries", "infinite",
             "--fragment-retries", "infinite",
             "--no-overwrites",
