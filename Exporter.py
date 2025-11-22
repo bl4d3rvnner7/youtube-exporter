@@ -46,7 +46,8 @@ def seconds_to_timestamp(seconds: float) -> str:
 
 
 def save_transcript_with_timestamps(transcript, output_file: str = "Transcript.txt"):
-    with open(output_file, "w", encoding="utf-8") as f:
+    global main_dir
+    with open(os.path.join(main_dir, output_file), "w", encoding="utf-8") as f:
         for item in transcript:
             text = item.get("text", "").strip()
             if not text:
@@ -82,7 +83,8 @@ def grab_msg(msg) -> str:
 
 
 def download_image(username: str):
-    filepath = os.path.join("ProfilePictures", f"{username}.jpg")
+    global main_dir
+    filepath = os.path.join(main_dir, "ProfilePictures", f"{username}.jpg")
     if os.path.exists(filepath):
         return
 
@@ -124,6 +126,7 @@ def parse_args():
 
 # ======================= MAIN FUNCTION =======================
 def main():
+    global main_dir
     args = parse_args()
     url = args.url
     skip_download = not args.download
@@ -137,12 +140,14 @@ def main():
 
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] Video ID: \x1b[92m{video_id}\x1b[0m")
 
-    os.makedirs("ProfilePictures", exist_ok=True)
-
     # ======================= VIDEO INFO =======================
     yt = YouTube(url, on_progress_callback=on_progress)
     ydl = yt_dlp.YoutubeDL({'quiet': True})
     info = ydl.extract_info(url, download=False)
+
+    main_dir = yt.title.replace('"', '').replace("'", "")
+    os.makedirs(main_dir, exist_ok=True)
+    os.makedirs(os.path.join(main_dir, "ProfilePictures"), exist_ok=True)
 
     start_time = "Live" if info.get('is_live') else datetime.utcfromtimestamp(info.get('release_timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] {info.get('title')} \x1b[97m(\x1b[95m{start_time}\x1b[97m)")
@@ -154,12 +159,12 @@ def main():
         print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading chat...\x1b[0m")
         downloader = YouTubeChatDownloader()
         try:
-            chat = downloader.download_chat(video_url=url, chat_type="both", output_file="ChatDump.json")
+            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "ChatDump.json"))
         except Exception as e:
             print(f"Chat-Error: {e}")
             chat = []
 
-        with open("Chatdump.txt", "w", encoding="utf-8") as f:
+        with open(os.path.join(main_dir, "Chatdump.txt"), "w", encoding="utf-8") as f:
             for msg in chat:
                 try:
                     kcounter += 1
@@ -193,7 +198,7 @@ def main():
                 'best[height<=1080]/best'
             ),
             'merge_output_format': 'mp4',
-            'outtmpl': '%(title)s.%(ext)s',
+            'outtmpl': os.path.join(main_dir, '%(title)s.%(ext)s'),
             'concurrent_fragment_downloads': 12,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -215,10 +220,12 @@ def main():
 ├─> Dislikes     : {get_dislikes(video_id)}
 └─> Description  : {yt.description}
 """
-    with open("Video Info.txt", "w", encoding="utf-8") as f:
+    with open(os.path.join(main_dir, "Video Info.txt"), "w", encoding="utf-8") as f:
         f.write(info_text)
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] Video Info.txt created\x1b[0m")
 
+    with open('.session', 'w') as f:
+        f.write(main_dir)
 
 # ======================= ENTRY POINT =======================
 if __name__ == "__main__":
