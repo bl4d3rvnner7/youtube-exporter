@@ -17,6 +17,10 @@ from pytubefix.cli import on_progress
 colorama.init()
 
 # ======================= UTILS =======================
+
+def safe_filename(name: str) -> str:
+    return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
+
 def extract_video_id(url: str) -> str:
     if not url or not isinstance(url, str):
         raise ValueError("Invalid URL")
@@ -144,11 +148,21 @@ def main():
     ydl = yt_dlp.YoutubeDL({'quiet': True})
     info = ydl.extract_info(url, download=False)
 
-    main_dir = yt.title.replace('"', '').replace("'", "")
+    main_dir = safe_filename(yt.title)
     os.makedirs(main_dir, exist_ok=True)
     os.makedirs(os.path.join(main_dir, "ProfilePictures"), exist_ok=True)
 
-    start_time = "Live" if info.get('is_live') else datetime.utcfromtimestamp(info.get('release_timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
+    try:
+        if info.get('is_live'):
+            start_time = "Live"
+        elif info.get('release_timestamp', 0):
+            start_time = datetime.utcfromtimestamp(info.get('release_timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
+        elif info.get('timestamp', 0):
+            start_time = datetime.utcfromtimestamp(info.get('timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
+        else:
+            start_time = "N/A"
+    except:
+        start_time = 'N/A'
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] {info.get('title')} \x1b[97m(\x1b[95m{start_time}\x1b[97m)")
 
     kcounter = 0
@@ -180,10 +194,16 @@ def main():
     if not skip_export:
         try:
             yt_transcript = YouTubeTranscriptApi()
-            transcript_class = yt_transcript.fetch(video_id=video_id, languages=["de"])
-            transcript = transcript_class.to_raw_data()
-            if len(transcript) > 0:
-                save_transcript_with_timestamps(transcript, "Transcript.txt")
+            try:
+                transcript_class = yt_transcript.fetch(video_id=video_id, languages=["de"])
+                transcript = transcript_class.to_raw_data()
+                if len(transcript) > 0:
+                    save_transcript_with_timestamps(transcript, "Transcript.txt")
+            except:
+                try:
+                    print(yt_transcript.get_transcript(video_id=video_id, languages=['de']))
+                except:
+                    pass
         except Exception as e:
             print(f"No Transcript available: {e}")
 
