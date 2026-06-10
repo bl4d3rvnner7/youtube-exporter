@@ -3,7 +3,7 @@ import sys
 import re
 import argparse
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
 import colorama
@@ -11,8 +11,6 @@ import requests
 import yt_dlp
 from yt_chat_downloader import YouTubeChatDownloader
 from youtube_transcript_api import YouTubeTranscriptApi
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
 
 colorama.init()
 
@@ -124,6 +122,13 @@ def parse_args():
     parser.add_argument("--url", type=str, required=True, help="YouTube video URL")
     parser.add_argument("--download", action="store_true", help="Download video")
     parser.add_argument("--export", action="store_true", help="Export chat & transcript")
+    parser.add_argument(
+        "--browser",
+        type=str,
+        default=None,
+        choices=["brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"],
+        help="Browser to load YouTube cookies from, to bypass the 'Sign in to confirm you're not a bot' check (e.g. --browser firefox)",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +139,7 @@ def main():
     url = args.url
     skip_download = not args.download
     skip_export = not args.export
+    browser = args.browser
 
     try:
         video_id = extract_video_id(url)
@@ -144,11 +150,19 @@ def main():
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] Video ID: \x1b[92m{video_id}\x1b[0m")
 
     # ======================= VIDEO INFO =======================
-    yt = YouTube(url, on_progress_callback=on_progress)
-    ydl = yt_dlp.YoutubeDL({'quiet': True})
-    info = ydl.extract_info(url, download=False)
+    ydl_opts = {'quiet': True}
+    if browser:
+        ydl_opts['cookiesfrombrowser'] = (browser,)
+    ydl = yt_dlp.YoutubeDL(ydl_opts)
+    try:
+        info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"\x1b[97m[\x1b[91m!\x1b[97m] Could not fetch video info: {e}\x1b[0m")
+        if not browser:
+            print("\x1b[97m[\x1b[93m*\x1b[97m] Tip: add --browser <brave|firefox|chrome|...> to load cookies and bypass bot detection.\x1b[0m")
+        sys.exit(1)
 
-    main_dir = safe_filename(yt.title)
+    main_dir = safe_filename(info.get('title') or video_id)
     os.makedirs(main_dir, exist_ok=True)
     os.makedirs(os.path.join(main_dir, "ProfilePictures"), exist_ok=True)
 
@@ -156,9 +170,9 @@ def main():
         if info.get('is_live'):
             start_time = "Live"
         elif info.get('release_timestamp', 0):
-            start_time = datetime.utcfromtimestamp(info.get('release_timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
+            start_time = datetime.fromtimestamp(info.get('release_timestamp', 0), timezone.utc).strftime('%d.%m.%Y - %H:%M:%S')
         elif info.get('timestamp', 0):
-            start_time = datetime.utcfromtimestamp(info.get('timestamp', 0)).strftime('%d.%m.%Y - %H:%M:%S')
+            start_time = datetime.fromtimestamp(info.get('timestamp', 0), timezone.utc).strftime('%d.%m.%Y - %H:%M:%S')
         else:
             start_time = "N/A"
     except:
@@ -172,7 +186,7 @@ def main():
         print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading chat...\x1b[0m")
         downloader = YouTubeChatDownloader()
         try:
-            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "Chat.json"))
+            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "Chat.json"), quiet=True)
         except Exception as e:
             print(f"Chat-Error: {e}")
             chat = []
@@ -224,8 +238,10 @@ def main():
             "--retries", "infinite",
             "--fragment-retries", "infinite",
             "--no-overwrites",
-            url
         ]
+        if browser:
+            cmd += ["--cookies-from-browser", browser]
+        cmd.append(url)
         subprocess.run(cmd, check=True)
         print(f"\x1b[97m[\x1b[92m+\x1b[97m] Saved Video!\x1b[0m")
 
@@ -233,16 +249,16 @@ def main():
     info_text = f"""~ Video Information ~
 
 ├─> Link         : {url}
-├─> Uploader     : {yt.author}
-├─> Title        : {yt.title}
+├─> Uploader     : {info.get('uploader') or info.get('channel', 'N/A')}
+├─> Title        : {info.get('title', 'N/A')}
 ├─> Video ID     : {video_id}
 ├─> Date         : {start_time}
 ├─> Comments     : {kcounter}
-├─> Views        : {yt.views or info.get('view_count', 'N/A')}
-├─> Thumbnail    : {yt.thumbnail_url}
-├─> Likes        : {yt.likes or info.get('like_count', 'N/A')}
+├─> Views        : {info.get('view_count', 'N/A')}
+├─> Thumbnail    : {info.get('thumbnail', 'N/A')}
+├─> Likes        : {info.get('like_count', 'N/A')}
 ├─> Dislikes     : {get_dislikes(video_id)}
-└─> Description  : {yt.description}
+└─> Description  : {info.get('description', '')}
 """
     with open(os.path.join(main_dir, "Video Info.txt"), "w", encoding="utf-8") as f:
         f.write(info_text)
