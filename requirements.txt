@@ -1,6 +1,5 @@
 yt-dlp
 yt-chat-downloader
 youtube-transcript-api
-pytubefix
 requests
 colorama
