@@ -1,6 +1,6 @@
 ![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=for-the-badge&logo=python&logoColor=blue)
 ![Code Style: Black](https://img.shields.io/badge/Code%20Style-Black-black?style=for-the-badge)
-![Dependencies](https://img.shields.io/badge/Dependencies-yt--dlp%20%7C%20yt--chat--downloader%20%7C%20transcript--api%20%7C%20colorama%20%7C%20requests-blue?style=for-the-badge)
+![Dependencies](https://img.shields.io/badge/Dependencies-yt--dlp%20%7C%20transcript--api%20%7C%20colorama%20%7C%20requests%20%7C%20secretstorage-blue?style=for-the-badge)
 ![Output](https://img.shields.io/badge/Output-Chat%20%7C%20Transcript%20%7C%20Video-orange?style=for-the-badge)
 ![Tested](https://img.shields.io/badge/Tested-Multiple%20YouTube%20Videos-brightgreen?style=for-the-badge)
 ![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-blueviolet?style=for-the-badge)
@@ -14,148 +14,302 @@
 
 # 🎥 YouTube Exporter
 
-**Export YouTube chats, transcripts, profile images, and optionally the video itself — all in one tool.**  
-Supports **live streams**, **replays**, **regular videos**, **shorts**, and all URL formats.  
-Perfect for analysis, archiving, or research.
+**Export YouTube chats, transcripts, profile images, metadata, and optionally the video itself — all in one tool.**
+
+Supports regular videos, live streams, replays, Shorts, `youtu.be` links, `/live/` links, `/watch?v=` links, embed URLs, and raw YouTube video IDs.
+
+The project includes two variants:
+
+- `Exporter.py` — standalone / cookieless version
+- `ExporterCookies.py` — browser-cookie version for videos where YouTube requires authentication or bot-check bypass
 
 ---
 
 ## 🚀 Features
 
-- Download **live chat** + **replay chat**
-- Save **transcripts** with timestamps (start → end)
-- Extract clean text logs from YouTube comments
-- Download **profile images** of each user
-- Extract full metadata → `Video Info.txt` (*Link*, *Uploader*, *Title*, *Video ID*, *Date*, *Comments*, *Views*, *Thumbnail*, *Likes & Dislikes*, *Description*)
+- Download **live chat / replay chat** when YouTube exposes a `live_chat` replay track
+- Save **transcripts** with timestamps
+- Export normalized chat data to `Chat.json`
+- Export readable chat logs to `Chat.txt`
+- Download **profile images** of chat users
+- Extract full metadata to `Video Info.txt`
 - Optional **video download** using `yt-dlp`
-- Load cookies from your **browser** (`--browser`) to bypass YouTube's *"Sign in to confirm you're not a bot"* check
-- Robust URL parser for every YouTube format
-- Auto-creates folders and cleans output formatting
+- Robust YouTube URL normalization
+- Supports `/watch`, `/live`, `/shorts`, `/embed`, `youtu.be`, and raw video IDs
+- Current `yt-dlp` JavaScript challenge support through EJS / Deno
+- Cross-platform yt-dlp execution through the current Python interpreter
+- Browser-cookie support in `ExporterCookies.py`
+- Graceful handling when chat replay is not exposed by YouTube
+- Automatic output folder creation
 
 ---
 
 ## 📦 Requirements
 
-```
-yt-dlp
-yt-chat-downloader
-youtube-transcript-api
-requests
-colorama
-```
+Recommended `requirements.txt`:
 
-Install them via:
+- `yt-dlp[default]`
+- `youtube-transcript-api`
+- `requests`
+- `colorama`
+- `secretstorage`
 
-```bash
-pip install -r requirements.txt
-````
+Install dependencies with:
+
+`pip install -r requirements.txt`
+
+### Additional system requirement
+
+Recent YouTube extraction may require a supported JavaScript runtime.
+
+Deno is recommended because yt-dlp can use it for YouTube EJS challenge solving.
+
+Deno is **not** a Python package and therefore is not included in `requirements.txt`.
 
 ---
 
-## ⚙️ Usage (CLI)
+## ⚙️ Usage
+
+### Standalone / cookieless version
 
 Basic usage:
 
-```bash
-python3 Exporter.py --url <YouTube_URL>
-```
+`python3 Exporter.py --url <YouTube_URL>`
 
 Export chat + transcript:
 
-```bash
-python3 Exporter.py --url <URL> --export
-```
+`python3 Exporter.py --url <URL> --export`
 
 Download video:
 
-```bash
-python3 Exporter.py --url <URL> --download
-```
+`python3 Exporter.py --url <URL> --download`
 
 Do everything:
 
-```bash
-python3 Exporter.py --url <URL> --export --download
-```
+`python3 Exporter.py --url <URL> --export --download`
+
+`Exporter.py` intentionally does not use browser cookies.
+
+If YouTube responds with:
+
+`Sign in to confirm you're not a bot`
+
+use `ExporterCookies.py` instead.
 
 ---
 
-## 🍪 Cookies / Bot Detection
+## 🍪 Browser Cookie Version
 
-YouTube increasingly blocks unauthenticated requests with:
+`ExporterCookies.py` uses browser cookies for videos where unauthenticated yt-dlp requests are blocked.
 
-```
-ERROR: Sign in to confirm you're not a bot.
-```
+Example:
 
-To get past it, load cookies straight from a browser you're **logged into YouTube** with, using `--browser`:
+`python3 ExporterCookies.py --url <URL> --export --download`
 
-```bash
-python3 Exporter.py --url <URL> --export --download --browser firefox
-```
+The cookie-enabled version is designed to use the same authentication path for metadata, chat extraction, and video downloads.
 
-Supported values: `brave`, `chrome`, `chromium`, `edge`, `firefox`, `opera`, `safari`, `vivaldi`, `whale`.
+Depending on the version in the repository, browser selection may be automatic or configurable.
 
-**Notes:**
+Typical supported browsers include:
 
-- Chromium-based browsers (Chrome, Brave, Edge, Opera, Vivaldi) may **lock their cookie database while running** — fully close the browser first if you get a "could not copy/decrypt cookies" error.
-- If you use multiple profiles, the cookies come from the **default** profile.
-- Without `--browser`, the tool runs cookieless and may hit the bot check on some videos/IPs.
+- Brave
+- Chrome
+- Chromium
+- Firefox
+- Edge
+
+### Browser cookie notes
+
+Chromium-based browsers may lock their cookie database while running.
+
+If cookie extraction fails:
+
+1. Fully close the browser.
+2. Run the exporter again.
+3. Make sure the selected browser profile is logged into YouTube.
+
+On Linux, `secretstorage` may be required for reading browser-encrypted cookies from the desktop keyring.
+
+---
+
+## 💬 Why `yt-chat-downloader` Was Removed
+
+Earlier versions of YouTube Exporter used `yt-chat-downloader` / `YouTubeChatDownloader` directly.
+
+That dependency has been removed from the current exporter path.
+
+### Reason
+
+YouTube has changed its live-chat and replay-chat behavior multiple times.
+
+Older and currently published `yt-chat-downloader` versions can fail on newer YouTube responses with issues such as:
+
+- missing continuation tokens
+- `400 INVALID_ARGUMENT`
+- bot-detection responses
+- authentication failures
+- parser failures caused by changed YouTube response structures
+- inconsistent cookie support between different library versions
+
+The package also created a second, independent YouTube extraction path inside the project.
+
+That meant a video could work perfectly through yt-dlp while chat extraction failed because `yt-chat-downloader` used different request logic, authentication handling, continuation parsing, and YouTube internals.
+
+### Current approach
+
+The exporter now uses **yt-dlp as the common YouTube backend** wherever possible.
+
+For chat replay extraction, yt-dlp exposes YouTube chat replay as a special `live_chat` subtitle track.
+
+This gives the project a more consistent architecture:
+
+- one YouTube extraction backend
+- one authentication path
+- one EJS / JavaScript challenge implementation
+- fewer version-specific incompatibilities
+- simpler cross-platform behavior
+- fewer dependencies
+
+If YouTube does not expose a `live_chat` track for a video, the exporter skips chat export gracefully instead of crashing.
+
+### Important limitation
+
+A completed livestream does not always immediately expose its chat replay.
+
+YouTube may still be processing the replay, the creator may have disabled chat replay, or the chat track may simply not be available through the extraction endpoint.
+
+In that case, the exporter can still download available video, metadata, and transcript data.
+
+---
+
+## 🔗 URL Handling
+
+The exporter normalizes supported YouTube URLs into a canonical form:
+
+`https://www.youtube.com/watch?v=<VIDEO_ID>`
+
+Supported input examples include:
+
+- `https://www.youtube.com/watch?v=VIDEO_ID`
+- `https://www.youtube.com/live/VIDEO_ID`
+- `https://youtu.be/VIDEO_ID`
+- `https://www.youtube.com/shorts/VIDEO_ID`
+- `https://www.youtube.com/embed/VIDEO_ID`
+- raw 11-character video IDs
+
+This avoids compatibility problems caused by downstream tools receiving `/live/`, Shorts, tracking parameters, or other URL variants.
 
 ---
 
 ## 📁 Output Overview
 
-This tool automatically generates:
+| File / Folder | Description |
+| --- | --- |
+| `Chat.txt` | Readable normalized chat log |
+| `Chat.json` | Structured chat export |
+| `Transcript.txt` | Transcript with timestamps |
+| `ProfilePictures/` | Downloaded profile images |
+| `Video Info.txt` | Metadata dump |
+| `*.mp4` | Downloaded video, when `--download` is used |
 
-| File / Folder      | Description                 |
-| ------------------ | --------------------------- |
-| `Chat.txt`         | Clean readable chat log     |
-| `Chat.json`        | Raw chat dump               |
-| `Transcript.txt`   | Transcript with timestamps  |
-| `ProfilePictures/` | Downloaded profile images   |
-| `Video Info.txt`   | Full metadata dump          |
-| `*.mp4`            | Downloaded video (optional) |
+Example chat entry:
 
-Example of a formatted chat entry:
+`[00:12] @user123 (John Doe): Hello everyone!`
 
-```
-[00:12] @user123 (John Doe): Hello everyone!
-```
+Example transcript entry:
 
-Example transcript line:
-
-```
-[00:00 -> 00:04] Willkommen zum heutigen Video!
-```
+`[00:00 -> 00:04] Willkommen zum heutigen Video!`
 
 ---
 
-## 🧠 Internals & How It Works
+## 🧠 Internals
 
-The script:
+The exporter currently follows this general flow:
 
-* Extracts the **video ID** using multiple regex patterns
-* Uses `yt-dlp` to fetch metadata without downloading
-* Downloads chat using `YouTubeChatDownloader`
-* Normalizes timestamps and usernames
-* Downloads profile pictures via channel scraper (you may have to update cookies at some time)
-* Retrieves transcripts via YouTube Transcript API
-* Writes output into clean text files
-* Optional video download using optimized yt-dlp options
+1. Extract and validate the YouTube video ID.
+2. Normalize the URL to a canonical `watch?v=` URL.
+3. Fetch metadata through yt-dlp.
+4. Check whether YouTube exposes a `live_chat` replay track.
+5. Export and normalize chat data when available.
+6. Retrieve transcript data through `youtube-transcript-api`.
+7. Download profile images where possible.
+8. Optionally download the video through yt-dlp.
+9. Write metadata and session information to disk.
 
-Everything is handled inside `Exporter.py`.
+The cookie-enabled variant adds browser authentication to the yt-dlp path.
+
+---
+
+## 🧩 yt-dlp / EJS Notes
+
+Recent YouTube versions use JavaScript challenges that may prevent older or minimally configured yt-dlp installations from exposing all formats.
+
+The exporter is designed for current yt-dlp releases with EJS support.
+
+Using:
+
+`yt-dlp[default]`
+
+is recommended.
+
+A supported JavaScript runtime such as Deno should also be installed on the host system.
+
+If formats are unexpectedly missing, first verify that:
+
+- yt-dlp is current
+- Deno is installed
+- EJS challenge solving is working
+- browser cookies are used when YouTube requires authentication
+
+---
+
+## 🛠 Troubleshooting
+
+### `Sign in to confirm you're not a bot`
+
+Use `ExporterCookies.py` with a browser profile that is logged into YouTube.
+
+### `There are no subtitles for the requested languages`
+
+For chat export, this can mean YouTube is not exposing a `live_chat` replay track.
+
+The exporter will skip chat export and continue with the remaining data.
+
+### `n challenge solving failed`
+
+Update yt-dlp and make sure a supported JavaScript runtime such as Deno is installed.
+
+### Browser cookies cannot be decrypted
+
+Close the browser completely and make sure the required platform keyring dependencies are installed.
+
+On Linux this can include `secretstorage`.
+
+### Requested video format is unavailable
+
+The exporter uses a flexible format selection targeting video up to 720p with an audio fallback rather than requiring one exact format ID.
 
 ---
 
 ## 🤝 Contributing
 
-Pull requests are always welcome.
-You can add formats, new exporting features, GUI support, or performance improvements.
+Pull requests are welcome.
+
+Useful contribution areas include:
+
+- additional YouTube URL variants
+- improved chat parsing
+- new export formats
+- GUI support
+- profile image handling
+- better retry logic
+- Windows/macOS/Linux compatibility improvements
+- tests for archived livestreams and replay chat
 
 ---
 
 ## ⭐ Support
 
-If you like this project, consider leaving a **star** ⭐ on GitHub.
-It motivates further updates and improvements.
+If you find the project useful, consider leaving a **star** ⭐ on GitHub.
+
+It helps support continued maintenance as YouTube and yt-dlp behavior changes.
