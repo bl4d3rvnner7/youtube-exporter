@@ -3,13 +3,14 @@ import sys
 import re
 import argparse
 import subprocess
+import json
+from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
 import colorama
 import requests
 import yt_dlp
-from yt_chat_downloader import YouTubeChatDownloader
 from youtube_transcript_api import YouTubeTranscriptApi
 
 colorama.init()
@@ -19,26 +20,57 @@ colorama.init()
 def safe_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
 
-def extract_video_id(url: str) -> str:
-    if not url or not isinstance(url, str):
-        raise ValueError("Invalid URL")
-    url = url.strip()
-    if "youtu.be/" in url:
-        return url.split("youtu.be/")[1].split("?")[0].split("&")[0].split("#")[0]
-    patterns = [
-        r"(?:v=|\/embed\/|\/watch\?v=|\/v\/|\/live\/|live\/|\/shorts\/|^)([a-zA-Z0-9_-]{11})",
-        r"youtube\.com.*[?&]v=([a-zA-Z0-9_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
+def extract_video_id(value: str) -> str:
+    """Extract an 11-character YouTube video ID from common URL variants or a raw ID."""
+    if not value or not isinstance(value, str):
+        raise ValueError("Invalid YouTube URL / video ID")
+
+    value = value.strip()
+
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return value
+
+    candidate = value
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", candidate):
+        if candidate.startswith(("youtube.com/", "www.youtube.com/", "m.youtube.com/",
+                                 "music.youtube.com/", "youtu.be/")):
+            candidate = "https://" + candidate
+
+    parsed = urlparse(candidate)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+
+    if host in {"youtu.be", "www.youtu.be"}:
+        video_id = path.lstrip("/").split("/", 1)[0]
+        if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            return video_id
+
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        query = parse_qs(parsed.query)
+        video_id = (query.get("v") or [None])[0]
+        if video_id and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            return video_id
+
+        match = re.search(r"/(?:live|shorts|embed|v)/([A-Za-z0-9_-]{11})(?:[/?#]|$)", path)
         if match:
             return match.group(1)
-    parsed = urlparse(url)
-    if parsed.hostname and "youtube.com" in parsed.hostname:
-        query_params = parse_qs(parsed.query)
-        if "v" in query_params:
-            return query_params["v"][0][:11]
-    raise ValueError(f"Could not extract video ID from URL: {url}")
+
+    patterns = [
+        r"(?:youtu\.be/|youtube\.com/(?:live|shorts|embed|v)/)([A-Za-z0-9_-]{11})",
+        r"[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value)
+        if match:
+            return match.group(1)
+
+    raise ValueError(f"Could not extract video ID from: {value}")
+
+
+def canonical_youtube_url(video_id: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise ValueError(f"Invalid YouTube video ID: {video_id}")
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def seconds_to_timestamp(seconds: float) -> str:
@@ -122,14 +154,157 @@ def parse_args():
     parser.add_argument("--url", type=str, required=True, help="YouTube video URL")
     parser.add_argument("--download", action="store_true", help="Download video")
     parser.add_argument("--export", action="store_true", help="Export chat & transcript")
-    parser.add_argument(
-        "--browser",
-        type=str,
-        default=None,
-        choices=["brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"],
-        help="Browser to load YouTube cookies from, to bypass the 'Sign in to confirm you're not a bot' check (e.g. --browser firefox)",
-    )
     return parser.parse_args()
+
+
+
+# ======================= YOUTUBE CHAT VIA YT-DLP =======================
+
+def has_live_chat_track(info):
+    subtitles = info.get("subtitles") or {}
+    automatic = info.get("automatic_captions") or {}
+    return "live_chat" in subtitles or "live_chat" in automatic
+
+
+def _runs_text(obj):
+    runs = obj.get("runs", []) if isinstance(obj, dict) else []
+    return "".join(run.get("text", "") for run in runs if isinstance(run, dict))
+
+
+def _parse_chat_renderer(renderer):
+    if not isinstance(renderer, dict):
+        return None
+
+    author = renderer.get("authorName", {})
+    display_name = author.get("simpleText", "") if isinstance(author, dict) else ""
+    message = _runs_text(renderer.get("message", {}))
+
+    if not message:
+        message = (
+            _runs_text(renderer.get("headerSubtext", {}))
+            or _runs_text(renderer.get("primaryText", {}))
+        )
+
+    badges = []
+    for badge in renderer.get("authorBadges", []) or []:
+        br = badge.get("liveChatAuthorBadgeRenderer", {})
+        tooltip = br.get("tooltip")
+        if tooltip:
+            badges.append(tooltip)
+
+    offset_ms = renderer.get("videoOffsetTimeMsec")
+    if offset_ms is not None:
+        try:
+            timestamp = seconds_to_timestamp(int(offset_ms) / 1000.0)
+        except Exception:
+            timestamp = ""
+    else:
+        timestamp = renderer.get("timestampText", {}).get("simpleText", "")
+
+    timestamp_usec = renderer.get("timestampUsec")
+    datetime_str = ""
+    if timestamp_usec:
+        try:
+            dt = datetime.fromtimestamp(int(timestamp_usec) / 1_000_000, timezone.utc)
+            datetime_str = dt.isoformat()
+        except Exception:
+            pass
+
+    return {
+        "user_id": renderer.get("authorExternalChannelId", ""),
+        "user_display_name": display_name or "Unknown",
+        "user_handle": "",
+        "datetime": datetime_str,
+        "timestamp": timestamp,
+        "comment": message,
+        "badges": badges,
+        "message_id": renderer.get("id", ""),
+    }
+
+
+def _walk_chat_actions(obj, out):
+    if isinstance(obj, dict):
+        for key in (
+            "liveChatTextMessageRenderer",
+            "liveChatPaidMessageRenderer",
+            "liveChatMembershipItemRenderer",
+            "liveChatPaidStickerRenderer",
+        ):
+            if key in obj:
+                parsed = _parse_chat_renderer(obj[key])
+                if parsed and (parsed.get("comment") or parsed.get("user_display_name")):
+                    out.append(parsed)
+
+        for value in obj.values():
+            _walk_chat_actions(value, out)
+
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_chat_actions(item, out)
+
+
+def download_chat_with_ytdlp(url, main_dir):
+    chat_base = os.path.join(main_dir, "yt_chat_raw")
+
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--remote-components", "ejs:github",
+        "--skip-download",
+        "--write-subs",
+        "--sub-langs", "live_chat",
+        "--sub-format", "json",
+        "-o", chat_base + ".%(ext)s",
+        url,
+    ]
+    subprocess.run(cmd, check=True)
+
+    candidates = [
+        Path(chat_base + ".live_chat.json"),
+        Path(chat_base + ".json"),
+    ]
+    raw_path = next((p for p in candidates if p.exists()), None)
+
+    if raw_path is None:
+        found = list(Path(main_dir).glob("yt_chat_raw*.json"))
+        raw_path = found[0] if found else None
+
+    if raw_path is None:
+        raise RuntimeError("yt-dlp did not produce a live_chat JSON file")
+
+    messages = []
+    with raw_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            _walk_chat_actions(data, messages)
+
+    unique = []
+    seen = set()
+    for msg in messages:
+        key = msg.get("message_id") or (
+            msg.get("timestamp"),
+            msg.get("user_display_name"),
+            msg.get("comment"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(msg)
+
+    with open(os.path.join(main_dir, "Chat.json"), "w", encoding="utf-8") as f:
+        json.dump(unique, f, ensure_ascii=False, indent=2)
+
+    try:
+        raw_path.unlink()
+    except OSError:
+        pass
+
+    return unique
 
 
 # ======================= MAIN FUNCTION =======================
@@ -139,27 +314,29 @@ def main():
     url = args.url
     skip_download = not args.download
     skip_export = not args.export
-    browser = args.browser
 
     try:
         video_id = extract_video_id(url)
+        url = canonical_youtube_url(video_id)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
 
     print(f"\x1b[97m[\x1b[92m+\x1b[97m] Video ID: \x1b[92m{video_id}\x1b[0m")
+    print(f"\x1b[97m[\x1b[92m+\x1b[97m] Canonical URL: \x1b[92m{url}\x1b[0m")
 
     # ======================= VIDEO INFO =======================
-    ydl_opts = {'quiet': True}
-    if browser:
-        ydl_opts['cookiesfrombrowser'] = (browser,)
-    ydl = yt_dlp.YoutubeDL(ydl_opts)
+    ydl_opts = {
+        "quiet": True,
+        "remote_components": {"ejs:github"},
+        "js_runtimes": {"deno": {}},
+    }
     try:
-        info = ydl.extract_info(url, download=False)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
     except Exception as e:
         print(f"\x1b[97m[\x1b[91m!\x1b[97m] Could not fetch video info: {e}\x1b[0m")
-        if not browser:
-            print("\x1b[97m[\x1b[93m*\x1b[97m] Tip: add --browser <brave|firefox|chrome|...> to load cookies and bypass bot detection.\x1b[0m")
+        print("\x1b[97m[\x1b[93m*\x1b[97m] This single version intentionally does not use browser cookies.\x1b[0m")
         sys.exit(1)
 
     main_dir = safe_filename(info.get('title') or video_id)
@@ -183,20 +360,31 @@ def main():
 
     # ======================= CHAT EXPORT =======================
     if not skip_export:
-        print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading chat...\x1b[0m")
-        downloader = YouTubeChatDownloader()
-        try:
-            chat = downloader.download_chat(video_url=url, chat_type="both", output_file=os.path.join(main_dir, "Chat.json"), quiet=True)
-        except Exception as e:
-            print(f"Chat-Error: {e}")
-            chat = []
+        chat = []
+
+        if has_live_chat_track(info):
+            print("\x1b[97m[\x1b[92m+\x1b[97m] Downloading chat via yt-dlp...\x1b[0m")
+            try:
+                chat = download_chat_with_ytdlp(url, main_dir)
+            except Exception as e:
+                print(f"Chat-Error: {e}")
+                chat = []
+        else:
+            print(
+                "\x1b[97m[\x1b[93m!\x1b[97m] "
+                "No live_chat replay track exposed by YouTube/yt-dlp. "
+                "Skipping chat export.\x1b[0m"
+            )
 
         with open(os.path.join(main_dir, "Chat.txt"), "w", encoding="utf-8") as f:
             for msg in chat:
                 try:
                     kcounter += 1
                     f.write(grab_msg(msg))
-                    username = msg.get('user_handle', '').lstrip('@') or msg.get('user_display_name', 'unknown')
+                    username = (
+                        msg.get("user_handle", "").lstrip("@")
+                        or msg.get("user_display_name", "unknown")
+                    )
                     download_image(username)
                 except Exception as e:
                     print(f"Error at dumping chat: {e}")
@@ -227,21 +415,20 @@ def main():
         
         outpath = os.path.join(main_dir, "%(title)s.%(ext)s")
         cmd = [
-            "yt-dlp",
+            sys.executable, "-m", "yt_dlp",
+            "--remote-components", "ejs:github",
             "-N", "4",
             "--no-part",
             "-o", outpath,
             "--wait-for-video", "5-15",
             "--continue",
-            "-f", "bestvideo[height=720]+bestaudio",
+            "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
             "--merge-output-format", "mp4",
             "--retries", "infinite",
             "--fragment-retries", "infinite",
             "--no-overwrites",
+            url,
         ]
-        if browser:
-            cmd += ["--cookies-from-browser", browser]
-        cmd.append(url)
         subprocess.run(cmd, check=True)
         print(f"\x1b[97m[\x1b[92m+\x1b[97m] Saved Video!\x1b[0m")
 
